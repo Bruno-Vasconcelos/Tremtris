@@ -30,8 +30,7 @@ const WALL_KICKS: Array[Vector2i] = [
 ]
 
 var rng := RandomNumberGenerator.new()
-
-var board: Array = []
+var board_state: BoardState = BoardState.new(BOARD_WIDTH, BOARD_HEIGHT, HIDDEN_ROWS)
 var bag: Array[String] = []
 var next_queue: Array[String] = []
 
@@ -43,18 +42,22 @@ var hold_type := ""
 var can_hold := true
 
 var score := 0
+var phase_score := 0
 var lines_cleared := 0
+var current_stage := 0
 var game_over := false
+var game_won := false
 
 var fall_timer := 0.0
 var lock_timer := 0.0
 
+# Game lifecycle
 func _ready() -> void:
 	rng.randomize()
 	start_new_game()
 
 func _process(delta: float) -> void:
-	if game_over:
+	if game_over or game_won:
 		queue_redraw()
 		return
 
@@ -75,7 +78,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			start_new_game()
 			return
 
-	if game_over:
+	if game_over or game_won:
 		return
 
 	if event.is_action_pressed("ui_left"):
@@ -93,28 +96,45 @@ func _unhandled_input(event: InputEvent) -> void:
 			hold_current_piece()
 
 func start_new_game() -> void:
-	board.clear()
-	for _y in range(BOARD_HEIGHT):
-		var row: Array = []
-		for _x in range(BOARD_WIDTH):
-			row.append("")
-		board.append(row)
-
+	board_state.reset()
 	bag.clear()
 	next_queue.clear()
 	hold_type = ""
 	can_hold = true
 
 	score = 0
+	phase_score = 0
 	lines_cleared = 0
+	current_stage = 0
 	game_over = false
+	game_won = false
 	fall_timer = 0.0
 	lock_timer = 0.0
 
-	fill_next_queue()
-	spawn_next_piece(true)
+	start_stage(current_stage)
 	queue_redraw()
 
+func start_stage(stage_index: int) -> void:
+	board_state.reset()
+	current_stage = stage_index
+	phase_score = 0
+	game_over = false
+	game_won = false
+	bag.clear()
+	next_queue.clear()
+	hold_type = ""
+	can_hold = true
+	fall_timer = 0.0
+	lock_timer = 0.0
+
+	board_state.apply_stage_obstacles(
+		StageLibrary.get_obstacles(stage_index),
+		StageLibrary.get_obstacle_durability(stage_index)
+	)
+	fill_next_queue()
+	spawn_next_piece(true)
+
+# Piece flow
 func fill_next_queue() -> void:
 	while next_queue.size() < 5:
 		if bag.is_empty():
@@ -129,7 +149,7 @@ func spawn_next_piece(allow_hold: bool) -> void:
 	current_pivot = Vector2i(BOARD_WIDTH / 2, HIDDEN_ROWS)
 	can_hold = allow_hold
 
-	if not is_valid_position(current_type, current_rotation, current_pivot):
+	if not board_state.is_valid_piece_position(current_type, current_rotation, current_pivot):
 		game_over = true
 
 func step_down_or_lock(elapsed: float) -> void:
@@ -144,7 +164,7 @@ func step_down_or_lock(elapsed: float) -> void:
 
 func try_move(delta: Vector2i) -> bool:
 	var target_pivot := current_pivot + delta
-	if is_valid_position(current_type, current_rotation, target_pivot):
+	if board_state.is_valid_piece_position(current_type, current_rotation, target_pivot):
 		current_pivot = target_pivot
 		return true
 	return false
@@ -153,7 +173,7 @@ func try_rotate(direction: int) -> void:
 	var target_rotation := posmod(current_rotation + direction, 4)
 	for kick in WALL_KICKS:
 		var target_pivot := current_pivot + kick
-		if is_valid_position(current_type, target_rotation, target_pivot):
+		if board_state.is_valid_piece_position(current_type, target_rotation, target_pivot):
 			current_rotation = target_rotation
 			current_pivot = target_pivot
 			return
@@ -178,71 +198,80 @@ func hold_current_piece() -> void:
 	current_type = swapped
 	current_rotation = 0
 	current_pivot = Vector2i(BOARD_WIDTH / 2, HIDDEN_ROWS)
-	if not is_valid_position(current_type, current_rotation, current_pivot):
+	if not board_state.is_valid_piece_position(current_type, current_rotation, current_pivot):
 		game_over = true
 
 func lock_current_piece() -> void:
-	for cell in get_piece_cells(current_type, current_rotation, current_pivot):
-		if cell.y >= 0 and cell.y < BOARD_HEIGHT:
-			board[cell.y][cell.x] = current_type
-
-	clear_completed_lines()
+	board_state.lock_piece(current_type, current_rotation, current_pivot)
+	var stage_changed := clear_completed_lines()
+	if stage_changed or game_won:
+		return
 	spawn_next_piece(true)
 
-func clear_completed_lines() -> void:
-	var kept_rows: Array = []
-	var removed_count := 0
+func clear_completed_lines() -> bool:
+	var cleared_count := board_state.resolve_completed_lines()
+	if cleared_count == 0:
+		return false
+	lines_cleared += cleared_count
 
-	for row in board:
-		if row.all(func(cell: String): return cell != ""):
-			removed_count += 1
-		else:
-			kept_rows.append(row)
+	if can_award_stage_score():
+		var earned_score: int = SCORE_BY_LINES.get(cleared_count, cleared_count * 100)
+		score += earned_score
+		phase_score += earned_score
 
-	while kept_rows.size() < BOARD_HEIGHT:
-		var new_row: Array = []
-		for _x in range(BOARD_WIDTH):
-			new_row.append("")
-		kept_rows.push_front(new_row)
+	if is_obstacle_stage() and has_remaining_stage_obstacles():
+		return false
 
-	board = kept_rows
+	if phase_score >= get_stage_goal():
+		return advance_stage()
 
-	if removed_count > 0:
-		lines_cleared += removed_count
-		score += SCORE_BY_LINES.get(removed_count, removed_count * 100)
+	return false
 
-func is_valid_position(piece_type: String, rotation: int, pivot: Vector2i) -> bool:
-	for cell in get_piece_cells(piece_type, rotation, pivot):
-		if cell.x < 0 or cell.x >= BOARD_WIDTH:
-			return false
-		if cell.y >= BOARD_HEIGHT:
-			return false
-		if cell.y >= 0 and board[cell.y][cell.x] != "":
-			return false
+func advance_stage() -> bool:
+	if current_stage >= StageLibrary.count() - 1:
+		game_won = true
+		return true
+
+	start_stage(current_stage + 1)
 	return true
 
+func get_stage_goal() -> int:
+	return StageLibrary.get_goal(current_stage)
+
+func is_obstacle_stage() -> bool:
+	return StageLibrary.stage_uses_obstacles(current_stage)
+
+func has_remaining_stage_obstacles() -> bool:
+	return board_state.count_remaining_obstacles() > 0
+
+func can_award_stage_score() -> bool:
+	if not is_obstacle_stage():
+		return true
+	return not has_remaining_stage_obstacles()
+
 func get_piece_cells(piece_type: String, rotation: int, pivot: Vector2i) -> Array[Vector2i]:
-	var cells: Array[Vector2i] = []
-	for offset in PieceLibrary.get_cells(piece_type, rotation):
-		cells.append(pivot + offset)
-	return cells
+	return board_state.get_piece_cells(piece_type, rotation, pivot)
 
 func get_ghost_pivot() -> Vector2i:
 	var ghost := current_pivot
-	while is_valid_position(current_type, current_rotation, ghost + Vector2i.DOWN):
+	while board_state.is_valid_piece_position(current_type, current_rotation, ghost + Vector2i.DOWN):
 		ghost += Vector2i.DOWN
 	return ghost
 
+# Rendering
 func _draw() -> void:
 	draw_board_background()
 	draw_locked_cells()
-	if not game_over:
+	draw_obstacle_cells()
+	if not game_over and not game_won:
 		draw_piece(get_piece_cells(current_type, current_rotation, get_ghost_pivot()), PieceLibrary.get_color(current_type).darkened(0.55), true)
 		draw_piece(get_piece_cells(current_type, current_rotation, current_pivot), PieceLibrary.get_color(current_type), false)
 	draw_grid_lines()
 	draw_side_panel()
 	if game_over:
 		draw_game_over_overlay()
+	elif game_won:
+		draw_stage_clear_overlay()
 
 func draw_board_background() -> void:
 	var board_size := Vector2(BOARD_WIDTH * CELL_SIZE, BOARD_VISIBLE_HEIGHT * CELL_SIZE)
@@ -252,11 +281,21 @@ func draw_board_background() -> void:
 func draw_locked_cells() -> void:
 	for y in range(HIDDEN_ROWS, BOARD_HEIGHT):
 		for x in range(BOARD_WIDTH):
-			var cell_type: String = board[y][x]
+			var cell_type: String = board_state.get_locked_cell_type(x, y)
 			if cell_type == "":
 				continue
 			var draw_pos := board_to_screen(Vector2i(x, y))
 			draw_block(draw_pos, PieceLibrary.get_color(cell_type), false)
+
+func draw_obstacle_cells() -> void:
+	var font := ThemeDB.fallback_font
+	for y in range(HIDDEN_ROWS, BOARD_HEIGHT):
+		for x in range(BOARD_WIDTH):
+			var durability: int = board_state.get_obstacle_durability(x, y)
+			if durability <= 0:
+				continue
+			var draw_pos := board_to_screen(Vector2i(x, y))
+			draw_obstacle_block(draw_pos, durability, font)
 
 func draw_piece(cells: Array[Vector2i], color: Color, is_ghost: bool) -> void:
 	for cell in cells:
@@ -291,24 +330,33 @@ func draw_side_panel() -> void:
 	var font := ThemeDB.fallback_font
 	var title_color := Color8(230, 235, 245)
 	var value_color := Color8(180, 205, 225)
+	var remaining_obstacles := board_state.count_remaining_obstacles()
+	var phase_label := "Meta: %d / %d" % [phase_score, get_stage_goal()]
+	if is_obstacle_stage() and remaining_obstacles > 0:
+		phase_label = "Blocos: %d restantes" % remaining_obstacles
 
 	draw_string(font, Vector2(SIDE_PANEL_X, 90), "TETRIS", HORIZONTAL_ALIGNMENT_LEFT, -1, 32, title_color)
+	draw_string(font, Vector2(SIDE_PANEL_X, 118), "Fase %d / %d" % [current_stage + 1, StageLibrary.count()], HORIZONTAL_ALIGNMENT_LEFT, -1, 18, title_color)
 	draw_string(font, Vector2(SIDE_PANEL_X, 130), "Linhas: %d" % lines_cleared, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, value_color)
 	draw_string(font, Vector2(SIDE_PANEL_X, 155), "Pontos: %d" % score, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, value_color)
+	draw_string(font, Vector2(SIDE_PANEL_X, 180), phase_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, value_color)
+	if is_obstacle_stage():
+		draw_string(font, Vector2(SIDE_PANEL_X, 205), "Pontuacao libera apos limpar os blocos", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, value_color)
 
-	draw_string(font, Vector2(SIDE_PANEL_X, 210), "Grip (Hold)", HORIZONTAL_ALIGNMENT_LEFT, -1, 20, title_color)
-	draw_preview_box(Vector2i(SIDE_PANEL_X, 220), hold_type)
+	draw_string(font, Vector2(SIDE_PANEL_X, 235), "Grip (Hold)", HORIZONTAL_ALIGNMENT_LEFT, -1, 20, title_color)
+	draw_preview_box(Vector2i(SIDE_PANEL_X, 245), hold_type)
 
-	draw_string(font, Vector2(SIDE_PANEL_X, 340), "Proximas", HORIZONTAL_ALIGNMENT_LEFT, -1, 20, title_color)
+	draw_string(font, Vector2(SIDE_PANEL_X, 365), "Proximas", HORIZONTAL_ALIGNMENT_LEFT, -1, 20, title_color)
 	for i in range(min(3, next_queue.size())):
-		draw_preview_box(Vector2i(SIDE_PANEL_X, 350 + i * 90), next_queue[i])
+		draw_preview_box(Vector2i(SIDE_PANEL_X, 375 + i * 90), next_queue[i])
 
 	draw_string(font, Vector2(SIDE_PANEL_X, 640), "Controles", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, title_color)
 	draw_string(font, Vector2(SIDE_PANEL_X, 665), "Setas: mover/rotacionar", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, value_color)
 	draw_string(font, Vector2(SIDE_PANEL_X, 685), "Z: rotacao anti-horaria", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, value_color)
 	draw_string(font, Vector2(SIDE_PANEL_X, 705), "Espaco/Enter: hard drop", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, value_color)
 	draw_string(font, Vector2(SIDE_PANEL_X, 725), "C: grip (hold)", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, value_color)
-	draw_string(font, Vector2(SIDE_PANEL_X, 745), "R: reiniciar", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, value_color)
+	draw_string(font, Vector2(SIDE_PANEL_X, 745), "Blocos de fase: 3 impactos", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, value_color)
+	draw_string(font, Vector2(SIDE_PANEL_X, 765), "R: reiniciar", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, value_color)
 
 func draw_preview_box(origin: Vector2i, piece_type: String) -> void:
 	var size := Vector2i(120, 80)
@@ -330,6 +378,21 @@ func draw_game_over_overlay() -> void:
 	var font := ThemeDB.fallback_font
 	draw_string(font, Vector2(BOARD_ORIGIN.x + 35, BOARD_ORIGIN.y + 250), "GAME OVER", HORIZONTAL_ALIGNMENT_LEFT, -1, 36, Color8(255, 220, 220))
 	draw_string(font, Vector2(BOARD_ORIGIN.x + 32, BOARD_ORIGIN.y + 285), "Pressione R para reiniciar", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(230, 230, 230))
+
+func draw_stage_clear_overlay() -> void:
+	var overlay := Rect2(BOARD_ORIGIN, Vector2(BOARD_WIDTH * CELL_SIZE, BOARD_VISIBLE_HEIGHT * CELL_SIZE))
+	draw_rect(overlay, Color(0, 0, 0, 0.55), true)
+	var font := ThemeDB.fallback_font
+	draw_string(font, Vector2(BOARD_ORIGIN.x + 58, BOARD_ORIGIN.y + 240), "VOCE VENCEU", HORIZONTAL_ALIGNMENT_LEFT, -1, 32, Color8(220, 245, 220))
+	draw_string(font, Vector2(BOARD_ORIGIN.x + 42, BOARD_ORIGIN.y + 275), "Fases concluidas: %d" % StageLibrary.count(), HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(230, 230, 230))
+	draw_string(font, Vector2(BOARD_ORIGIN.x + 26, BOARD_ORIGIN.y + 302), "Pressione R para recomecar", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(230, 230, 230))
+
+func draw_obstacle_block(screen_pos: Vector2i, durability: int, font: Font) -> void:
+	var color: Color = StageLibrary.get_obstacle_color(durability)
+	var rect := Rect2(Vector2(screen_pos), Vector2(CELL_SIZE, CELL_SIZE))
+	draw_rect(rect.grow(-1), color, true)
+	draw_rect(rect.grow(-1), color.lightened(0.15), false, 2.0)
+	draw_string(font, Vector2(screen_pos.x + 9, screen_pos.y + 20), str(durability), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color8(245, 245, 245))
 
 func board_to_screen(cell: Vector2i) -> Vector2i:
 	var visible_y := cell.y - HIDDEN_ROWS

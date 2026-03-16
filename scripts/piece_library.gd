@@ -2,19 +2,19 @@ extends RefCounted
 class_name PieceLibrary
 
 const TYPES: Array[String] = [
-	"Six", "Seven"
-	#"I", "O", "T", "S", "Z", "J", "L", 
+	#"Six", "Seven"
+	"I", "O", "T", "S", "Z", "J", "L", 
 	#"Big", "Small",
 	 ]
  
 const COLORS := {
 	"I": Color8(0, 240, 240),
-	"O": Color8(240, 240, 0),
-	"T": Color8(160, 0, 240),
-	"S": Color8(0, 240, 0),
-	"Z": Color8(240, 0, 0),
-	 "J": Color8(0, 80, 240),
-	"L": Color8(240, 160, 0),
+	"O": Color8(0, 240, 240),
+	"T": Color8(0, 240, 240),
+	"S":Color8(0, 240, 240),
+	"Z": Color8(0, 240, 240),
+	"J":Color8(0, 240, 240),
+	"L": Color8(0, 240, 240),
 	"Big": Color8(20, 170, 0),
 	"Small": Color8(20, 170, 0),
 	"Six": Color8(0, 0, 150),
