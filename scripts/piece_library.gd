@@ -1,24 +1,22 @@
 extends RefCounted
 class_name PieceLibrary
 
+const PASTA_COLOR := Color8(241, 205, 101)
+const BACON_COLOR := Color8(132, 78, 52)
+const BACON_SUFFIX := ":bacon"
+
 const TYPES: Array[String] = [
-	#"Six", "Seven"
 	"I", "O", "T", "S", "Z", "J", "L", 
-	#"Big", "Small",
 	 ]
  
 const COLORS := {
-	"I": Color8(0, 240, 240),
-	"O": Color8(0, 240, 240),
-	"T": Color8(0, 240, 240),
-	"S":Color8(0, 240, 240),
-	"Z": Color8(0, 240, 240),
-	"J":Color8(0, 240, 240),
-	"L": Color8(0, 240, 240),
-	"Big": Color8(20, 170, 0),
-	"Small": Color8(20, 170, 0),
-	"Six": Color8(0, 0, 150),
-	"Seven": Color8(150,0,0),
+	"I": PASTA_COLOR,
+	"O": PASTA_COLOR,
+	"T": PASTA_COLOR,
+	"S": PASTA_COLOR,
+	"Z": PASTA_COLOR,
+	"J": PASTA_COLOR,
+	"L": PASTA_COLOR,
 }
 
 const ROTATIONS := {
@@ -64,78 +62,6 @@ const ROTATIONS := {
 		[Vector2i(-1, 0), Vector2i(0, 0), Vector2i(1, 0), Vector2i(-1, -1)],
 		[Vector2i(-1, 1), Vector2i(0, -1), Vector2i(0, 0), Vector2i(0, 1)],
 	],
-	"Big": [
-		[Vector2i(0, 0), Vector2i(1, 0),Vector2i(2, 0),
-		Vector2i(0, 1), Vector2i(1, 1),  Vector2i(2, 1),
-		Vector2i(0, 2), Vector2i(1, 2),  Vector2i(2, 2)],
-		[Vector2i(0, 0), Vector2i(1, 0),Vector2i(2, 0),
-		Vector2i(0, 1), Vector2i(1, 1),  Vector2i(2, 1),
-		Vector2i(0, 2), Vector2i(1, 2),  Vector2i(2, 2)],
-		[Vector2i(0, 0), Vector2i(1, 0),Vector2i(2, 0),
-		Vector2i(0, 1), Vector2i(1, 1),  Vector2i(2, 1),
-		Vector2i(0, 2), Vector2i(1, 2),  Vector2i(2, 2)],
-		[Vector2i(0, 0), Vector2i(1, 0),Vector2i(2, 0),
-		Vector2i(0, 1), Vector2i(1, 1),  Vector2i(2, 1),
-		Vector2i(0, 2), Vector2i(1, 2),  Vector2i(2, 2)],
-	],
-	"Small": [
-		[Vector2i(0, 0)],
-		[Vector2i(0, 0)],
-		[Vector2i(0, 0)],
-		[Vector2i(0, 0)],
-	],
-	"Six": [
-		[
-			Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0),
-			Vector2i(0, 1),
-			Vector2i(0, 2), Vector2i(1, 2), Vector2i(2, 2),
-			Vector2i(0, 3), 				Vector2i(2, 3),
-			Vector2i(0, 4), Vector2i(1, 4), Vector2i(2, 4),
-		],
-		[
-			Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0), Vector2i(4, 0),
-			Vector2i(0, 1), Vector2i(2, 1), Vector2i(4, 1),
-			Vector2i(0, 2), Vector2i(1, 2), Vector2i(2, 2), Vector2i(4, 2),
-		],
-		[
-			Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0),
-			Vector2i(0, 1), Vector2i(2, 1),
-			Vector2i(0, 2), Vector2i(1, 2), Vector2i(2, 2),
-			Vector2i(2, 3),
-			Vector2i(0, 4), Vector2i(1, 4), Vector2i(2, 4),
-		],
-		[
-			Vector2i(0, 0), Vector2i(2, 0), Vector2i(3, 0), Vector2i(4, 0),
-			Vector2i(0, 1), Vector2i(2, 1), Vector2i(4, 1),
-			Vector2i(0, 2), Vector2i(1, 2), Vector2i(2, 2), Vector2i(3, 2), Vector2i(4, 2),
-		],
-	],
-	"Seven": [
-		[
-			Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0),
-											Vector2i(2, 1),
-											Vector2i(2, 2),
-											Vector2i(2, 3),
-											Vector2i(2, 4),
-		],
-		[
-			Vector2i(0, 0), Vector2i(0, 1), Vector2i(0, 2),
-			Vector2i(0, 3), Vector2i(1, 3), Vector2i(2, 3), Vector2i(3, 3),
-		],
-		[
-			Vector2i(0, 0),
-			Vector2i(0, 1),
-			Vector2i(0, 2),
-			Vector2i(0, 3),
-			Vector2i(0, 4), Vector2i(1, 4), Vector2i(2, 4),
-		],
-		[
-			Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0),
-			Vector2i(3, 1),
-			Vector2i(3, 2),
-			Vector2i(3, 3),
-		],
-	]
 }
 
 static func get_cells(piece_type: String, rotation: int) -> Array[Vector2i]:
@@ -146,5 +72,22 @@ static func get_cells(piece_type: String, rotation: int) -> Array[Vector2i]:
 		typed_cells.append(cell as Vector2i)
 	return typed_cells
 
-static func get_color(piece_type: String) -> Color:
-	return COLORS[piece_type]
+static func make_piece_id(piece_type: String, is_bacon: bool = false) -> String:
+	if is_bacon:
+		return piece_type + BACON_SUFFIX
+	return piece_type
+
+static func get_base_type(piece_id: String) -> String:
+	if piece_id.contains(":"):
+		return piece_id.get_slice(":", 0)
+	return piece_id
+
+static func is_bacon_piece(piece_id: String) -> bool:
+	return piece_id.ends_with(BACON_SUFFIX)
+
+static func get_color(piece_id: String) -> Color:
+	if is_bacon_piece(piece_id):
+		return BACON_COLOR
+
+	var base_type := get_base_type(piece_id)
+	return COLORS.get(base_type, PASTA_COLOR)

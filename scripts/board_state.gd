@@ -30,14 +30,18 @@ func reset() -> void:
 func apply_stage_obstacles(cells: Array[Vector2i], durability: int) -> void:
 	for cell in cells:
 		var board_y: int = cell.y + hidden_rows
+		if cell.x < 0 or cell.x >= width:
+			continue
+		if board_y < 0 or board_y >= height:
+			continue
 		obstacle_cells[board_y][cell.x] = durability
 
-func lock_piece(piece_type: String, rotation: int, pivot: Vector2i) -> void:
+func lock_piece(piece_type: String, piece_id: String, rotation: int, pivot: Vector2i) -> void:
 	for cell in get_piece_cells(piece_type, rotation, pivot):
 		if cell.y >= 0 and cell.y < height:
-			locked_cells[cell.y][cell.x] = piece_type
+			locked_cells[cell.y][cell.x] = piece_id
 
-func resolve_completed_lines() -> int:
+func resolve_completed_lines() -> Dictionary:
 	var full_rows: Array[int] = []
 	for y in range(height):
 		var row_is_full := true
@@ -49,7 +53,9 @@ func resolve_completed_lines() -> int:
 			full_rows.append(y)
 
 	if full_rows.is_empty():
-		return 0
+		return {"count": 0, "cleared_rows": []}
+
+	var cleared_snapshot: Array[int] = full_rows.duplicate()
 
 	var rows_to_remove: Array[int] = []
 	for y in full_rows:
@@ -65,7 +71,7 @@ func resolve_completed_lines() -> int:
 	if not rows_to_remove.is_empty():
 		collapse_rows(rows_to_remove)
 
-	return full_rows.size()
+	return {"count": full_rows.size(), "cleared_rows": cleared_snapshot}
 
 func collapse_rows(rows_to_remove: Array[int]) -> void:
 	var remaining_locked: Array = []
