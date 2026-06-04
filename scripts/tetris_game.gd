@@ -4,6 +4,8 @@ extends Node2D
 const _CampaignSaveScript := preload("res://scripts/campaign_save.gd")
 const _CampaignThemeScript := preload("res://scripts/campaign_theme.gd")
 
+const MAIN_MENU_SCENE := "res://scenes/main_menu.tscn"
+
 const BOARD_WIDTH := 10
 const BOARD_VISIBLE_HEIGHT := 20
 const HIDDEN_ROWS := 2
@@ -29,6 +31,9 @@ const ACTIVE_TOP_RADIUS := CELL_SIZE * 0.18
 const ACTIVE_TOP_WIDTH := CELL_SIZE * 0.30
 const ACTIVE_EDGE_INSET := CELL_SIZE * 0.18
 const ACTIVE_INNER_RADIUS := CELL_SIZE * 0.18
+
+const CLEANER_COOLDOWN_SEC := 60.0
+const CLEANER_LINE_REDUCTION_SEC := 5.0
 
 const SCORE_BY_LINES := {
 	1: 100,
@@ -101,22 +106,27 @@ var locked_cells_cache: Dictionary = {}
 var obstacle_cells_cache: Array[Vector2i] = []
 var obstacle_durability_cache: Dictionary = {}
 
+var cleaner_cooldown_remaining := 0.0
+
 # Game lifecycle
 func _ready() -> void:
 	rng.randomize()
 	_setup_music_player()
-	start_campaign_from_save()
+	_boot_from_session()
 
 
-func _setup_music_player() -> void:
-	_music_player = AudioStreamPlayer.new()
-	_music_player.name = "ActMusic"
-	_music_player.bus = "Master"
-	add_child(_music_player)
+func _boot_from_session() -> void:
+	match GameSession.start_mode:
+		GameSession.StartMode.NEW_GAME:
+			start_new_game()
+		GameSession.StartMode.CONTINUE:
+			start_campaign_from_save()
+		GameSession.StartMode.STAGE_SELECT:
+			_start_at_stage(GameSession.selected_stage_index)
+	queue_redraw()
 
 
-func start_campaign_from_save() -> void:
-	var saved: int = clampi(_CampaignSaveScript.load_stage_index(), 0, StageLibrary.count() - 1)
+func _reset_round_state() -> void:
 	board_state.reset()
 	bag.clear()
 	next_queue.clear()
@@ -124,10 +134,6 @@ func start_campaign_from_save() -> void:
 	current_type = ""
 	hold_piece_id = ""
 	can_hold = true
-
-	score = 0
-	stage_score = 0
-	lines_cleared = 0
 	game_over = false
 	game_won = false
 	paused = false
@@ -141,11 +147,28 @@ func start_campaign_from_save() -> void:
 	boss_lines_cleared_stage = 0
 	boss_orders_cleared_stage = 0
 	order_highlight_board_y = -1
+	cleaner_cooldown_remaining = 0.0
 
+
+func _setup_music_player() -> void:
+	_music_player = AudioStreamPlayer.new()
+	_music_player.name = "ActMusic"
+	_music_player.bus = "Master"
+	add_child(_music_player)
+
+
+func start_campaign_from_save() -> void:
+	score = 0
+	stage_score = 0
+	lines_cleared = 0
+	var saved: int = clampi(_CampaignSaveScript.load_stage_index(), 0, StageLibrary.count() - 1)
 	start_stage(saved)
-	queue_redraw()
 
 func _process(delta: float) -> void:
+	if not paused and not game_over and not game_won:
+		if cleaner_cooldown_remaining > 0.0:
+			cleaner_cooldown_remaining = maxf(0.0, cleaner_cooldown_remaining - delta)
+
 	if paused or game_over or game_won:
 		queue_redraw()
 		return
@@ -166,6 +189,9 @@ func _process(delta: float) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_M and (paused or game_over or game_won):
+			_return_to_main_menu()
+			return
 		if event.keycode == KEY_ESCAPE and not game_over and not game_won:
 			paused = not paused
 			queue_redraw()
@@ -194,91 +220,51 @@ func _unhandled_input(event: InputEvent) -> void:
 			try_rotate(-1)
 		elif event.keycode == KEY_C:
 			hold_current_piece()
+		elif event.keycode == KEY_L:
+			try_use_cleaner()
+
+func try_use_cleaner() -> void:
+	if not _CampaignSaveScript.is_cleaner_unlocked():
+		return
+	if cleaner_cooldown_remaining > 0.0:
+		return
+	if not board_state.damage_highest_durability_obstacle():
+		return
+	cleaner_cooldown_remaining = CLEANER_COOLDOWN_SEC
+	board_cache_dirty = true
+	queue_redraw()
 
 func start_new_game() -> void:
-	_CampaignSaveScript.clear_save()
-	board_state.reset()
-	bag.clear()
-	next_queue.clear()
-	current_piece_id = ""
-	current_type = ""
-	hold_piece_id = ""
-	can_hold = true
-
 	score = 0
 	stage_score = 0
 	lines_cleared = 0
-	current_stage = 0
-	game_over = false
-	game_won = false
-	paused = false
-	fall_timer = 0.0
-	lock_timer = 0.0
-	piece_visual_time = 0.0
-	horizontal_dir = 0
-	das_timer = 0.0
-	arr_timer = 0.0
-	board_cache_dirty = true
-	boss_lines_cleared_stage = 0
-	boss_orders_cleared_stage = 0
-	order_highlight_board_y = -1
-
+	_CampaignSaveScript.begin_new_campaign()
 	start_stage(0)
-	_CampaignSaveScript.save_stage_index(0)
 	queue_redraw()
+
+
+func _start_at_stage(stage_index: int) -> void:
+	score = 0
+	stage_score = 0
+	lines_cleared = 0
+	start_stage(clampi(stage_index, 0, StageLibrary.count() - 1))
+	queue_redraw()
+
+
+func _return_to_main_menu() -> void:
+	get_tree().change_scene_to_file(MAIN_MENU_SCENE)
 
 
 func retry_current_stage() -> void:
 	var stage_idx := current_stage
 	score = maxi(0, score - stage_score)
-	board_state.reset()
-	bag.clear()
-	next_queue.clear()
-	current_piece_id = ""
-	current_type = ""
-	hold_piece_id = ""
-	can_hold = true
-	stage_score = 0
-	game_over = false
-	game_won = false
-	paused = false
-	fall_timer = 0.0
-	lock_timer = 0.0
-	piece_visual_time = 0.0
-	horizontal_dir = 0
-	das_timer = 0.0
-	arr_timer = 0.0
-	board_cache_dirty = true
-	boss_lines_cleared_stage = 0
-	boss_orders_cleared_stage = 0
-	order_highlight_board_y = -1
-
 	start_stage(stage_idx)
 	queue_redraw()
 
 func start_stage(stage_index: int) -> void:
-	board_state.reset()
+	_reset_round_state()
 	current_stage = stage_index
 	stage_score = 0
-	game_over = false
-	game_won = false
-	paused = false
-	bag.clear()
-	next_queue.clear()
-	current_piece_id = ""
-	current_type = ""
-	hold_piece_id = ""
-	can_hold = true
-	fall_timer = 0.0
-	lock_timer = 0.0
-	piece_visual_time = 0.0
-	horizontal_dir = 0
-	das_timer = 0.0
-	arr_timer = 0.0
-	board_cache_dirty = true
-	boss_lines_cleared_stage = 0
-	boss_orders_cleared_stage = 0
-	order_highlight_board_y = -1
 
 	board_state.apply_stage_obstacles(
 		StageLibrary.get_obstacles(stage_index),
@@ -417,6 +403,12 @@ func clear_completed_lines() -> bool:
 
 	lines_cleared += cleared_count
 
+	if cleared_count > 0 and _CampaignSaveScript.is_cleaner_unlocked():
+		cleaner_cooldown_remaining = maxf(
+			0.0,
+			cleaner_cooldown_remaining - CLEANER_LINE_REDUCTION_SEC * float(cleared_count)
+		)
+
 	var earned_score: int = SCORE_BY_LINES.get(cleared_count, cleared_count * 100)
 	score += earned_score
 	stage_score += earned_score
@@ -445,14 +437,19 @@ func clear_completed_lines() -> bool:
 	return advance_stage()
 
 func advance_stage() -> bool:
+	if StageLibrary.is_boss_stage(current_stage) and current_stage == StageLibrary.get_first_boss_stage_index():
+		_CampaignSaveScript.unlock_cleaner()
+
 	if current_stage >= StageLibrary.count() - 1:
 		game_won = true
 		_CampaignSaveScript.save_stage_index(current_stage)
+		_CampaignSaveScript.update_highest_unlocked(current_stage)
 		return true
 
 	var next_stage: int = current_stage + 1
 	start_stage(next_stage)
 	_CampaignSaveScript.save_stage_index(next_stage)
+	_CampaignSaveScript.update_highest_unlocked(next_stage)
 	return true
 
 func get_stage_goal() -> int:
@@ -737,15 +734,6 @@ func draw_obstacle_cells() -> void:
 		var draw_pos := board_to_screen(cell)
 		draw_obstacle_block(draw_pos, durability, font)
 
-func draw_piece(cells: Array[Vector2i], color: Color, is_ghost: bool) -> void:
-	for cell in cells:
-		if cell.y < HIDDEN_ROWS:
-			continue
-		if cell.y >= BOARD_HEIGHT:
-			continue
-		var draw_pos := board_to_screen(cell)
-		draw_block(draw_pos, color, is_ghost)
-
 func draw_soft_piece(cells: Array[Vector2i], color: Color, settle: float = 0.0, squash: float = 0.0) -> void:
 	var visible_cells: Array[Vector2i] = []
 	var cell_lookup: Dictionary = {}
@@ -941,12 +929,22 @@ func draw_side_panel() -> void:
 	if not next_queue.is_empty():
 		draw_preview_box(Vector2i(side_panel_x, top_y + 290), next_queue[0], Vector2i(152, 92))
 
-	draw_rect(Rect2(Vector2(side_panel_x, top_y + 420), Vector2(170, 110)), Color8(18, 24, 34), true)
-	draw_rect(Rect2(Vector2(side_panel_x, top_y + 420), Vector2(170, 110)), Color8(88, 106, 126), false, 2.0)
-	draw_string(font, Vector2(side_panel_x + 16, top_y + 448), "ESC", HORIZONTAL_ALIGNMENT_LEFT, -1, 26, title_color)
-	draw_string(font, Vector2(side_panel_x + 16, top_y + 476), "Pausa e ajuda", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, value_color)
-	draw_string(font, Vector2(side_panel_x + 16, top_y + 498), "R nova campanha", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, label_color)
-	draw_string(font, Vector2(side_panel_x + 16, top_y + 518), "T tenta de novo", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, label_color)
+	if _CampaignSaveScript.is_cleaner_unlocked():
+		draw_rect(Rect2(Vector2(side_panel_x, top_y + 392), Vector2(170, 52)), Color8(18, 24, 34), true)
+		draw_rect(Rect2(Vector2(side_panel_x, top_y + 392), Vector2(170, 52)), Color8(88, 106, 126), false, 2.0)
+		draw_string(font, Vector2(side_panel_x + 16, top_y + 412), "LIMPEZA", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, title_color)
+		var cleaner_status := "PRONTO (L)"
+		if cleaner_cooldown_remaining > 0.0:
+			cleaner_status = "Recarga: %ds" % int(ceil(cleaner_cooldown_remaining))
+		draw_string(font, Vector2(side_panel_x + 16, top_y + 432), cleaner_status, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, value_color)
+
+	draw_rect(Rect2(Vector2(side_panel_x, top_y + 452), Vector2(170, 110)), Color8(18, 24, 34), true)
+	draw_rect(Rect2(Vector2(side_panel_x, top_y + 452), Vector2(170, 110)), Color8(88, 106, 126), false, 2.0)
+	draw_string(font, Vector2(side_panel_x + 16, top_y + 480), "ESC", HORIZONTAL_ALIGNMENT_LEFT, -1, 26, title_color)
+	draw_string(font, Vector2(side_panel_x + 16, top_y + 508), "Pausa e ajuda", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, value_color)
+	draw_string(font, Vector2(side_panel_x + 16, top_y + 528), "R nova campanha", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, label_color)
+	draw_string(font, Vector2(side_panel_x + 16, top_y + 546), "T tenta de novo", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, label_color)
+	draw_string(font, Vector2(side_panel_x + 16, top_y + 564), "M menu principal", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, label_color)
 
 func draw_preview_box(origin: Vector2i, piece_id: String, size := Vector2i(120, 80)) -> void:
 	draw_rect(Rect2(origin, size), Color8(22, 28, 38), true)
@@ -981,17 +979,26 @@ func draw_pause_overlay() -> void:
 	draw_string(font, panel.position + Vector2(28, 182), "Z: rotacao anti-horaria", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 	draw_string(font, panel.position + Vector2(28, 210), "Espaco ou Enter: hard drop", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 	draw_string(font, panel.position + Vector2(28, 238), "C: hold", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
-	draw_string(font, panel.position + Vector2(28, 266), "Esc: voltar ao jogo", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
+	if _CampaignSaveScript.is_cleaner_unlocked():
+		draw_string(font, panel.position + Vector2(28, 266), "L: produto de limpeza", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
+		draw_string(font, panel.position + Vector2(28, 294), "Esc: voltar ao jogo", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
+	else:
+		draw_string(font, panel.position + Vector2(28, 266), "Esc: voltar ao jogo", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 
 	draw_string(font, panel.position + Vector2(390, 124), "Campanha", HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color8(244, 238, 230))
 	draw_string(font, panel.position + Vector2(390, 154), "15 fases em 3 atos; chefes nas fases 5, 10 e 15", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 	draw_string(font, panel.position + Vector2(390, 182), "Fase normal: barra de pontos + escudo com obstaculos", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 	draw_string(font, panel.position + Vector2(390, 210), "Pedidos: fileira dourada da bonus (ato 2)", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 	draw_string(font, panel.position + Vector2(390, 238), "Chefao: regra especial no painel superior", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
+	if _CampaignSaveScript.is_cleaner_unlocked():
+		draw_string(font, panel.position + Vector2(390, 266), "L atinge obstaculo mais resistente", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
+		draw_string(font, panel.position + Vector2(390, 294), "Recarga 60s; linhas limpas -5s", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 
 	draw_string(font, panel.position + Vector2(28, 318), "Progresso", HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color8(244, 238, 230))
-	draw_string(font, panel.position + Vector2(28, 348), "Salva ao passar de fase. R comeca do zero.", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
+	draw_string(font, panel.position + Vector2(28, 348), "Salva ao passar de fase. Menu no inicio do jogo.", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 	draw_string(font, panel.position + Vector2(28, 376), "T em game over: tenta a mesma fase de novo", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
+	draw_string(font, panel.position + Vector2(28, 404), "M: voltar ao menu principal", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
+	draw_string(font, panel.position + Vector2(28, 432), "R: nova campanha (do inicio)", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 
 	draw_string(font, panel.position + Vector2(28, 486), "Esc para fechar", HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Color8(244, 238, 230))
 
@@ -1004,6 +1011,7 @@ func draw_game_over_overlay() -> void:
 	draw_string(font, board_origin_vec + Vector2(35, 250), "GAME OVER", HORIZONTAL_ALIGNMENT_LEFT, -1, 36, Color8(255, 220, 220))
 	draw_string(font, board_origin_vec + Vector2(32, 285), "T: tentar esta fase de novo", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(230, 230, 230))
 	draw_string(font, board_origin_vec + Vector2(32, 308), "R: nova campanha (do inicio)", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(230, 230, 230))
+	draw_string(font, board_origin_vec + Vector2(32, 331), "M: menu principal", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(230, 230, 230))
 
 func draw_stage_clear_overlay() -> void:
 	var board_origin: Vector2i = get_board_origin()
@@ -1015,6 +1023,7 @@ func draw_stage_clear_overlay() -> void:
 	draw_string(font, board_origin_vec + Vector2(10, 246), "CONCLUIDA", HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color8(220, 245, 220))
 	draw_string(font, board_origin_vec + Vector2(10, 276), "Tres chefes vencidos.", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color8(230, 230, 230))
 	draw_string(font, board_origin_vec + Vector2(10, 300), "R: nova campanha", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color8(230, 230, 230))
+	draw_string(font, board_origin_vec + Vector2(10, 324), "M: menu principal", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color8(230, 230, 230))
 
 func draw_obstacle_block(screen_pos: Vector2i, durability: int, font: Font) -> void:
 	var color: Color = StageLibrary.get_obstacle_color(durability)

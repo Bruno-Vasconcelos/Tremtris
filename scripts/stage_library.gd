@@ -339,3 +339,7 @@ static func uses_order_line(stage_index: int) -> bool:
 
 static func get_stage_label(stage_index: int) -> String:
 	return "Fase %d / %d" % [stage_index + 1, STAGES.size()]
+
+
+static func get_first_boss_stage_index() -> int:
+	return 4

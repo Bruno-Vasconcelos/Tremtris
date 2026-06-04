@@ -127,5 +127,36 @@ func count_remaining_obstacles() -> int:
 				remaining += 1
 	return remaining
 
+
+func damage_highest_durability_obstacle() -> bool:
+	var best_y := -1
+	var best_x := width
+	var best_durability := 0
+
+	for y in range(height):
+		for x in range(width):
+			var durability: int = obstacle_cells[y][x]
+			if durability <= 0:
+				continue
+			var take := false
+			if durability > best_durability:
+				take = true
+			elif durability == best_durability:
+				if y > best_y:
+					take = true
+				elif y == best_y and x < best_x:
+					take = true
+			if take:
+				best_durability = durability
+				best_y = y
+				best_x = x
+
+	if best_durability <= 0:
+		return false
+
+	obstacle_cells[best_y][best_x] -= 1
+	return true
+
+
 func is_occupied(cell: Vector2i) -> bool:
 	return locked_cells[cell.y][cell.x] != "" or obstacle_cells[cell.y][cell.x] > 0
