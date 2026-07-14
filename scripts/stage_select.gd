@@ -45,8 +45,8 @@ func _apply_theme() -> void:
 
 func _style_menu_button(button: Button, accent: Color) -> void:
 	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color8(18, 24, 34)
-	normal.border_color = Color8(88, 106, 126)
+	normal.bg_color = Color8(35, 27, 20)
+	normal.border_color = Color8(110, 82, 52)
 	normal.set_border_width_all(2)
 	normal.set_corner_radius_all(6)
 	normal.content_margin_top = 10
@@ -54,13 +54,16 @@ func _style_menu_button(button: Button, accent: Color) -> void:
 
 	var hover := normal.duplicate() as StyleBoxFlat
 	hover.border_color = accent
-	hover.bg_color = Color8(24, 32, 44)
+	hover.bg_color = Color8(48, 36, 26)
 
 	button.add_theme_stylebox_override("normal", normal)
 	button.add_theme_stylebox_override("hover", hover)
 	button.add_theme_stylebox_override("pressed", hover)
 	button.add_theme_color_override("font_color", Color8(242, 236, 226))
 	button.add_theme_font_size_override("font_size", 20)
+
+	if not button.mouse_entered.is_connected(_on_button_hover):
+		button.mouse_entered.connect(_on_button_hover)
 
 
 func _build_stage_list() -> void:
@@ -110,8 +113,8 @@ func _make_stage_button(stage_index: int, accent: Color) -> Button:
 	button.add_theme_font_size_override("font_size", 14)
 
 	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color8(18, 24, 34) if unlocked else Color8(14, 18, 24)
-	normal.border_color = Color8(88, 106, 126) if unlocked else Color8(44, 54, 68)
+	normal.bg_color = Color8(35, 27, 20) if unlocked else Color8(24, 19, 14)
+	normal.border_color = Color8(110, 82, 52) if unlocked else Color8(62, 50, 38)
 	normal.set_border_width_all(2)
 	normal.set_corner_radius_all(6)
 	normal.content_margin_top = 6
@@ -119,7 +122,7 @@ func _make_stage_button(stage_index: int, accent: Color) -> Button:
 
 	var hover := normal.duplicate() as StyleBoxFlat
 	hover.border_color = accent
-	hover.bg_color = Color8(24, 32, 44)
+	hover.bg_color = Color8(48, 36, 26)
 
 	button.add_theme_stylebox_override("normal", normal)
 	button.add_theme_stylebox_override("hover", hover)
@@ -131,6 +134,7 @@ func _make_stage_button(stage_index: int, accent: Color) -> Button:
 
 	if unlocked:
 		button.pressed.connect(_on_stage_pressed.bind(stage_index))
+		button.mouse_entered.connect(_on_button_hover)
 
 	return button
 
@@ -138,9 +142,15 @@ func _make_stage_button(stage_index: int, accent: Color) -> Button:
 func _on_stage_pressed(stage_index: int) -> void:
 	if not CampaignSave.is_stage_unlocked(stage_index):
 		return
+	Sfx.play("menu_confirm")
 	GameSession.set_stage_select(stage_index)
 	get_tree().change_scene_to_file(GAME_SCENE)
 
 
 func _on_back_pressed() -> void:
+	Sfx.play("menu_confirm")
 	get_tree().change_scene_to_file(MAIN_MENU_SCENE)
+
+
+func _on_button_hover() -> void:
+	Sfx.play("menu_move")

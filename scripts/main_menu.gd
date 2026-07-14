@@ -41,8 +41,8 @@ func _apply_theme() -> void:
 
 func _style_menu_button(button: Button, accent: Color, outer: Color) -> void:
 	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color8(18, 24, 34)
-	normal.border_color = Color8(88, 106, 126)
+	normal.bg_color = Color8(35, 27, 20)
+	normal.border_color = Color8(110, 82, 52)
 	normal.set_border_width_all(2)
 	normal.set_corner_radius_all(6)
 	normal.content_margin_top = 12
@@ -50,19 +50,26 @@ func _style_menu_button(button: Button, accent: Color, outer: Color) -> void:
 
 	var hover := normal.duplicate() as StyleBoxFlat
 	hover.border_color = accent
-	hover.bg_color = Color8(24, 32, 44)
+	hover.bg_color = Color8(48, 36, 26)
 
 	var disabled := normal.duplicate() as StyleBoxFlat
-	disabled.bg_color = Color8(14, 18, 24)
-	disabled.border_color = Color8(44, 54, 68)
+	disabled.bg_color = Color8(24, 19, 14)
+	disabled.border_color = Color8(62, 50, 38)
 
 	button.add_theme_stylebox_override("normal", normal)
 	button.add_theme_stylebox_override("hover", hover)
 	button.add_theme_stylebox_override("pressed", hover)
 	button.add_theme_stylebox_override("disabled", disabled)
 	button.add_theme_color_override("font_color", Color8(242, 236, 226))
-	button.add_theme_color_override("font_disabled_color", Color8(90, 100, 112))
+	button.add_theme_color_override("font_disabled_color", Color8(110, 96, 78))
 	button.add_theme_font_size_override("font_size", 22)
+
+	if not button.mouse_entered.is_connected(_on_button_hover):
+		button.mouse_entered.connect(_on_button_hover)
+
+
+func _on_button_hover() -> void:
+	Sfx.play("menu_move")
 
 
 func _refresh_progress_ui() -> void:
@@ -78,6 +85,7 @@ func _refresh_progress_ui() -> void:
 
 
 func _on_new_game_pressed() -> void:
+	Sfx.play("menu_confirm")
 	GameSession.set_new_game()
 	get_tree().change_scene_to_file(GAME_SCENE)
 
@@ -85,13 +93,16 @@ func _on_new_game_pressed() -> void:
 func _on_continue_pressed() -> void:
 	if not CampaignSave.has_progress():
 		return
+	Sfx.play("menu_confirm")
 	GameSession.set_continue()
 	get_tree().change_scene_to_file(GAME_SCENE)
 
 
 func _on_stage_select_pressed() -> void:
+	Sfx.play("menu_confirm")
 	get_tree().change_scene_to_file(STAGE_SELECT_SCENE)
 
 
 func _on_quit_pressed() -> void:
+	Sfx.play("menu_confirm")
 	get_tree().quit()

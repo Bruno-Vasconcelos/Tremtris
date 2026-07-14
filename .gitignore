@@ -2,3 +2,6 @@
 .godot/
 /android/
 .vscode/
+
+# Local scratch / export dumps
+_tmp_ase/

@@ -163,6 +163,7 @@ const STAGES := [
 		"boss_orders_target": 5,
 		"gravity_mult": 1.0,
 		"boss_name": "Crítico de Salão",
+		"hide_next": true,
 	},
 	# --- Ato 3: pressão ---
 	{
@@ -217,6 +218,7 @@ const STAGES := [
 		"boss_orders_target": 0,
 		"gravity_mult": 0.68,
 		"boss_name": "",
+		"grease_interval": 22.0,
 	},
 	{
 		"goal": 1420,
@@ -236,6 +238,7 @@ const STAGES := [
 		"boss_orders_target": 0,
 		"gravity_mult": 0.58,
 		"boss_name": "",
+		"grease_interval": 18.0,
 	},
 	{
 		"goal": 0,
@@ -252,6 +255,7 @@ const STAGES := [
 		"boss_orders_target": 0,
 		"gravity_mult": 0.48,
 		"boss_name": "Estrela Michelin",
+		"grease_interval": 13.0,
 	},
 ]
 
@@ -327,6 +331,16 @@ static func get_boss_orders_target(stage_index: int) -> int:
 
 static func get_gravity_mult(stage_index: int) -> float:
 	return float(_row(stage_index).get("gravity_mult", 1.0))
+
+
+## Intervalo (segundos) entre linhas de "gordura" que sobem. 0 = desativado.
+static func get_grease_interval(stage_index: int) -> float:
+	return float(_row(stage_index).get("grease_interval", 0.0))
+
+
+## Se true, a peca "PROXIMA" fica oculta (twist de boss caotico).
+static func hides_next(stage_index: int) -> bool:
+	return bool(_row(stage_index).get("hide_next", false))
 
 
 static func get_boss_display_name(stage_index: int) -> String:

@@ -1,8 +1,9 @@
 extends Node2D
 
 ## Referências explícitas (evita depender só de `class_name` no escopo do parser).
-const _CampaignSaveScript := preload("res://scripts/campaign_save.gd")
-const _CampaignThemeScript := preload("res://scripts/campaign_theme.gd")
+const CAMPAIGN_SAVE_SCRIPT := preload("res://scripts/campaign_save.gd")
+const CAMPAIGN_THEME_SCRIPT := preload("res://scripts/campaign_theme.gd")
+const PASTA_TILES_SCRIPT := preload("res://scripts/pasta_tiles.gd")
 
 const MAIN_MENU_SCENE := "res://scenes/main_menu.tscn"
 
@@ -34,6 +35,15 @@ const ACTIVE_INNER_RADIUS := CELL_SIZE * 0.18
 
 const CLEANER_COOLDOWN_SEC := 60.0
 const CLEANER_LINE_REDUCTION_SEC := 5.0
+
+const FREEZER_DURATION_SEC := 6.0
+const FREEZER_COOLDOWN_SEC := 45.0
+const FREEZER_SLOWDOWN := 4.0
+
+const ORDER_MAX_HEIGHT_RATIO := 0.5
+const ORDER_FIRST_HEIGHT_RATIO := 0.35
+const ORDER_BOSS_LAST_HEIGHT_RATIO := 0.8
+const ORDER_HEIGHT_VARIANCE := 2
 
 const SCORE_BY_LINES := {
 	1: 100,
@@ -108,8 +118,21 @@ var obstacle_durability_cache: Dictionary = {}
 
 var cleaner_cooldown_remaining := 0.0
 
+## Poder "Freezer": desacelera a gravidade por alguns segundos.
+var freezer_time_remaining := 0.0
+var freezer_cooldown_remaining := 0.0
+
+## Mecanica "gordura subindo": linha-lixo periodica pela base.
+var grease_timer := 0.0
+
+## Efeito visual transitorio de "vapor" ao limpar linhas.
+const CLEAR_EFFECT_DURATION := 0.45
+var clear_effect_time := -1.0
+var clear_effect_rows: Array[int] = []
+
 # Game lifecycle
 func _ready() -> void:
+	texture_filter = TEXTURE_FILTER_NEAREST
 	rng.randomize()
 	_setup_music_player()
 	_boot_from_session()
@@ -148,6 +171,11 @@ func _reset_round_state() -> void:
 	boss_orders_cleared_stage = 0
 	order_highlight_board_y = -1
 	cleaner_cooldown_remaining = 0.0
+	freezer_time_remaining = 0.0
+	freezer_cooldown_remaining = 0.0
+	grease_timer = 0.0
+	clear_effect_time = -1.0
+	clear_effect_rows.clear()
 
 
 func _setup_music_player() -> void:
@@ -161,19 +189,31 @@ func start_campaign_from_save() -> void:
 	score = 0
 	stage_score = 0
 	lines_cleared = 0
-	var saved: int = clampi(_CampaignSaveScript.load_stage_index(), 0, StageLibrary.count() - 1)
+	var saved: int = clampi(CAMPAIGN_SAVE_SCRIPT.load_stage_index(), 0, StageLibrary.count() - 1)
 	start_stage(saved)
 
 func _process(delta: float) -> void:
 	if not paused and not game_over and not game_won:
 		if cleaner_cooldown_remaining > 0.0:
 			cleaner_cooldown_remaining = maxf(0.0, cleaner_cooldown_remaining - delta)
+		if freezer_time_remaining > 0.0:
+			freezer_time_remaining = maxf(0.0, freezer_time_remaining - delta)
+		if freezer_cooldown_remaining > 0.0:
+			freezer_cooldown_remaining = maxf(0.0, freezer_cooldown_remaining - delta)
 
 	if paused or game_over or game_won:
 		queue_redraw()
 		return
 
 	piece_visual_time += delta
+	if clear_effect_time >= 0.0:
+		clear_effect_time += delta
+		if clear_effect_time > CLEAR_EFFECT_DURATION:
+			clear_effect_time = -1.0
+	update_grease_rise(delta)
+	if game_over:
+		queue_redraw()
+		return
 	update_horizontal_movement(delta)
 
 	var step_interval := get_effective_fall_interval()
@@ -222,23 +262,60 @@ func _unhandled_input(event: InputEvent) -> void:
 			hold_current_piece()
 		elif event.keycode == KEY_L:
 			try_use_cleaner()
+		elif event.keycode == KEY_F:
+			try_use_freezer()
 
 func try_use_cleaner() -> void:
-	if not _CampaignSaveScript.is_cleaner_unlocked():
+	if not CAMPAIGN_SAVE_SCRIPT.is_cleaner_unlocked():
 		return
 	if cleaner_cooldown_remaining > 0.0:
 		return
 	if not board_state.damage_highest_durability_obstacle():
 		return
+	Sfx.play("cleaner")
 	cleaner_cooldown_remaining = CLEANER_COOLDOWN_SEC
 	board_cache_dirty = true
 	queue_redraw()
+
+func try_use_freezer() -> void:
+	if not CAMPAIGN_SAVE_SCRIPT.is_cleaner_unlocked():
+		return
+	if freezer_cooldown_remaining > 0.0 or freezer_time_remaining > 0.0:
+		return
+	freezer_time_remaining = FREEZER_DURATION_SEC
+	freezer_cooldown_remaining = FREEZER_COOLDOWN_SEC
+	Sfx.play("freezer")
+	queue_redraw()
+
+func update_grease_rise(delta: float) -> void:
+	var interval := StageLibrary.get_grease_interval(current_stage)
+	if interval <= 0.0:
+		return
+	grease_timer += delta
+	if grease_timer < interval:
+		return
+	grease_timer -= interval
+	trigger_grease_rise()
+
+func trigger_grease_rise() -> void:
+	var gap_x := rng.randi_range(0, BOARD_WIDTH - 1)
+	board_state.rise_grease_row(gap_x)
+	board_cache_dirty = true
+	Sfx.play("grease")
+
+	# A peca atual pode ter passado a sobrepor celulas: sobe ate ficar valida.
+	while not board_state.is_valid_piece_position(current_type, current_rotation, current_pivot):
+		current_pivot += Vector2i.UP
+		if current_pivot.y < 0:
+			game_over = true
+			Sfx.play("game_over")
+			return
 
 func start_new_game() -> void:
 	score = 0
 	stage_score = 0
 	lines_cleared = 0
-	_CampaignSaveScript.begin_new_campaign()
+	CAMPAIGN_SAVE_SCRIPT.begin_new_campaign()
 	start_stage(0)
 	queue_redraw()
 
@@ -281,8 +358,36 @@ func start_stage(stage_index: int) -> void:
 	spawn_next_piece(true)
 
 
+func _order_visible_y_from_bottom_ratio(ratio: float) -> int:
+	var clamped_ratio: float = clampf(ratio, 0.0, 1.0)
+	return (BOARD_VISIBLE_HEIGHT - 1) - int(round(clamped_ratio * float(BOARD_VISIBLE_HEIGHT - 1)))
+
+
+func _is_boss_last_order() -> bool:
+	if not StageLibrary.is_boss_variant_stage(current_stage):
+		return false
+	if StageLibrary.get_boss_mode(current_stage) != "orders":
+		return false
+	var target: int = StageLibrary.get_boss_orders_target(current_stage)
+	return target - boss_orders_cleared_stage == 1
+
+
 func roll_order_highlight() -> void:
-	order_highlight_board_y = HIDDEN_ROWS + rng.randi_range(0, BOARD_VISIBLE_HEIGHT - 1)
+	if _is_boss_last_order():
+		order_highlight_board_y = HIDDEN_ROWS + _order_visible_y_from_bottom_ratio(ORDER_BOSS_LAST_HEIGHT_RATIO)
+		return
+
+	var min_visible_y: int = _order_visible_y_from_bottom_ratio(ORDER_MAX_HEIGHT_RATIO)
+	var max_visible_y: int = BOARD_VISIBLE_HEIGHT - 1
+
+	if order_highlight_board_y < 0:
+		order_highlight_board_y = HIDDEN_ROWS + _order_visible_y_from_bottom_ratio(ORDER_FIRST_HEIGHT_RATIO)
+		return
+
+	var current_visible_y: int = order_highlight_board_y - HIDDEN_ROWS
+	var delta: int = rng.randi_range(-ORDER_HEIGHT_VARIANCE, ORDER_HEIGHT_VARIANCE)
+	var new_visible_y: int = clampi(current_visible_y + delta, min_visible_y, max_visible_y)
+	order_highlight_board_y = HIDDEN_ROWS + new_visible_y
 
 
 func _refresh_act_music() -> void:
@@ -292,7 +397,7 @@ func _refresh_act_music() -> void:
 	if act == _music_act_loaded:
 		return
 	_music_act_loaded = act
-	var path: String = _CampaignThemeScript.get_act_music_path(act)
+	var path: String = CAMPAIGN_THEME_SCRIPT.get_act_music_path(act)
 	if not ResourceLoader.exists(path):
 		_music_player.stop()
 		return
@@ -304,11 +409,14 @@ func _refresh_act_music() -> void:
 
 
 func get_effective_fall_interval() -> float:
-	return FALL_INTERVAL * StageLibrary.get_gravity_mult(current_stage)
+	var interval := FALL_INTERVAL * StageLibrary.get_gravity_mult(current_stage)
+	if freezer_time_remaining > 0.0:
+		interval *= FREEZER_SLOWDOWN
+	return interval
 
 
 func get_current_palette() -> Dictionary:
-	return _CampaignThemeScript.get_palette(StageLibrary.get_theme_id(current_stage))
+	return CAMPAIGN_THEME_SCRIPT.get_palette(StageLibrary.get_theme_id(current_stage))
 
 # Piece flow
 func fill_next_queue() -> void:
@@ -331,6 +439,7 @@ func spawn_next_piece(allow_hold: bool) -> void:
 
 	if not board_state.is_valid_piece_position(current_type, current_rotation, current_pivot):
 		game_over = true
+		Sfx.play("game_over")
 
 func step_down_or_lock(elapsed: float) -> void:
 	if try_move(Vector2i.DOWN):
@@ -356,9 +465,11 @@ func try_rotate(direction: int) -> void:
 		if board_state.is_valid_piece_position(current_type, target_rotation, target_pivot):
 			current_rotation = target_rotation
 			current_pivot = target_pivot
+			Sfx.play("rotate", 0.05)
 			return
 
 func hard_drop() -> void:
+	Sfx.play("hard_drop")
 	while try_move(Vector2i.DOWN):
 		pass
 	lock_current_piece()
@@ -380,12 +491,14 @@ func hold_current_piece() -> void:
 	current_pivot = Vector2i(int(BOARD_WIDTH / 2), HIDDEN_ROWS)
 	if not board_state.is_valid_piece_position(current_type, current_rotation, current_pivot):
 		game_over = true
+		Sfx.play("game_over")
 
 func lock_current_piece() -> void:
 	if current_type == "":
 		return
 
 	board_state.lock_piece(current_type, current_piece_id, current_rotation, current_pivot)
+	Sfx.play("lock", 0.06)
 	board_cache_dirty = true
 	var stage_changed := clear_completed_lines()
 	if stage_changed or game_won:
@@ -401,9 +514,17 @@ func clear_completed_lines() -> bool:
 
 	var cleared_rows: Array = result.get("cleared_rows", []) as Array
 
+	clear_effect_rows.clear()
+	for row_y in cleared_rows:
+		var visible_row: int = int(row_y) - HIDDEN_ROWS
+		if visible_row >= 0 and visible_row < BOARD_VISIBLE_HEIGHT:
+			clear_effect_rows.append(visible_row)
+	if not clear_effect_rows.is_empty():
+		clear_effect_time = 0.0
+
 	lines_cleared += cleared_count
 
-	if cleared_count > 0 and _CampaignSaveScript.is_cleaner_unlocked():
+	if cleared_count > 0 and CAMPAIGN_SAVE_SCRIPT.is_cleaner_unlocked():
 		cleaner_cooldown_remaining = maxf(
 			0.0,
 			cleaner_cooldown_remaining - CLEANER_LINE_REDUCTION_SEC * float(cleared_count)
@@ -413,6 +534,11 @@ func clear_completed_lines() -> bool:
 	score += earned_score
 	stage_score += earned_score
 
+	if cleared_count >= 4:
+		Sfx.play("tetris")
+	else:
+		Sfx.play("line", 0.06)
+
 	if StageLibrary.uses_order_line(current_stage):
 		var hit_order := false
 		for y in cleared_rows:
@@ -420,6 +546,7 @@ func clear_completed_lines() -> bool:
 				hit_order = true
 				break
 		if hit_order:
+			Sfx.play("order_bell")
 			if StageLibrary.is_boss_variant_stage(current_stage) and StageLibrary.get_boss_mode(current_stage) == "orders":
 				boss_orders_cleared_stage += 1
 			elif StageLibrary.get_mechanic_id(current_stage) == "orders":
@@ -430,6 +557,7 @@ func clear_completed_lines() -> bool:
 
 	if StageLibrary.is_boss_variant_stage(current_stage) and StageLibrary.get_boss_mode(current_stage) == "lines":
 		boss_lines_cleared_stage += cleared_count
+		Sfx.play("boss_hit")
 
 	if not can_advance_stage():
 		return false
@@ -437,19 +565,20 @@ func clear_completed_lines() -> bool:
 	return advance_stage()
 
 func advance_stage() -> bool:
+	Sfx.play("stage_clear")
 	if StageLibrary.is_boss_stage(current_stage) and current_stage == StageLibrary.get_first_boss_stage_index():
-		_CampaignSaveScript.unlock_cleaner()
+		CAMPAIGN_SAVE_SCRIPT.unlock_cleaner()
 
 	if current_stage >= StageLibrary.count() - 1:
 		game_won = true
-		_CampaignSaveScript.save_stage_index(current_stage)
-		_CampaignSaveScript.update_highest_unlocked(current_stage)
+		CAMPAIGN_SAVE_SCRIPT.save_stage_index(current_stage)
+		CAMPAIGN_SAVE_SCRIPT.update_highest_unlocked(current_stage)
 		return true
 
 	var next_stage: int = current_stage + 1
 	start_stage(next_stage)
-	_CampaignSaveScript.save_stage_index(next_stage)
-	_CampaignSaveScript.update_highest_unlocked(next_stage)
+	CAMPAIGN_SAVE_SCRIPT.save_stage_index(next_stage)
+	CAMPAIGN_SAVE_SCRIPT.update_highest_unlocked(next_stage)
 	return true
 
 func get_stage_goal() -> int:
@@ -509,7 +638,8 @@ func update_horizontal_movement(delta: float) -> void:
 		horizontal_dir = wanted_dir
 		das_timer = 0.0
 		arr_timer = 0.0
-		try_move(Vector2i(horizontal_dir, 0))
+		if try_move(Vector2i(horizontal_dir, 0)):
+			Sfx.play("move", 0.06)
 		lock_timer = 0.0
 		return
 
@@ -523,6 +653,7 @@ func update_horizontal_movement(delta: float) -> void:
 		if not try_move(Vector2i(horizontal_dir, 0)):
 			arr_timer = 0.0
 			return
+		Sfx.play("move", 0.06)
 		lock_timer = 0.0
 
 func get_wall_kicks(piece_type: String, from_rotation: int, to_rotation: int) -> Array[Vector2i]:
@@ -555,14 +686,13 @@ func _draw() -> void:
 	ensure_board_draw_cache()
 	draw_order_highlight()
 	if not game_over and not game_won:
-		var ghost_color := PieceLibrary.get_color(current_piece_id).darkened(0.35)
-		ghost_color.a = 0.32
-		draw_soft_piece(get_piece_cells(current_type, current_rotation, get_ghost_pivot()), ghost_color)
+		draw_current_pasta_piece(get_ghost_pivot(), 0.34, 0.0, 0.0)
 	draw_locked_cells()
 	draw_obstacle_cells()
+	draw_clear_effect()
 	if not game_over and not game_won:
 		var settle := get_settle_amount()
-		draw_soft_piece(get_piece_cells(current_type, current_rotation, current_pivot), PieceLibrary.get_color(current_piece_id), settle, settle)
+		draw_current_pasta_piece(current_pivot, 1.0, settle, settle)
 	draw_side_panel()
 	if paused:
 		draw_pause_overlay()
@@ -629,10 +759,52 @@ func draw_scene_background() -> void:
 	var inner: Color = pal.get("scene_inner", Color8(12, 18, 28)) as Color
 	var border: Color = pal.get("scene_border", Color8(46, 62, 82)) as Color
 	draw_rect(Rect2(Vector2.ZERO, viewport_size), outer, true)
-	draw_rect(Rect2(Vector2(28, 24), viewport_size - Vector2(56, 48)), inner, true)
-	draw_rect(Rect2(Vector2(28, 24), viewport_size - Vector2(56, 48)), border, false, 2.0)
-	draw_rect(Rect2(Vector2(54, 54), Vector2(viewport_size.x * 0.22, viewport_size.y * 0.18)), Color(0.08, 0.18, 0.20, 0.35), true)
-	draw_rect(Rect2(Vector2(viewport_size.x * 0.58, viewport_size.y * 0.60), Vector2(viewport_size.x * 0.16, viewport_size.y * 0.16)), Color(0.20, 0.10, 0.16, 0.25), true)
+	var inner_rect := Rect2(Vector2(28, 24), viewport_size - Vector2(56, 48))
+	draw_rect(inner_rect, inner, true)
+	draw_backsplash_tiles(inner_rect, border)
+	draw_rect(inner_rect, border, false, 2.0)
+	draw_steam_wisps(viewport_size)
+
+func draw_backsplash_tiles(area: Rect2, line_color: Color) -> void:
+	const TILE := 48.0
+	var col := Color(line_color.r, line_color.g, line_color.b, 0.07)
+	var x := area.position.x + TILE
+	while x < area.position.x + area.size.x:
+		draw_line(Vector2(x, area.position.y), Vector2(x, area.position.y + area.size.y), col, 1.0)
+		x += TILE
+	var y := area.position.y + TILE
+	while y < area.position.y + area.size.y:
+		draw_line(Vector2(area.position.x, y), Vector2(area.position.x + area.size.x, y), col, 1.0)
+		y += TILE
+
+func draw_steam_wisps(viewport_size: Vector2) -> void:
+	var pal: Dictionary = get_current_palette()
+	var accent: Color = pal.get("accent", Color8(255, 200, 120)) as Color
+	for i in range(4):
+		var phase := piece_visual_time * 0.6 + float(i) * 1.7
+		var base_x := viewport_size.x * (0.1 + 0.22 * float(i))
+		var rise := fposmod(phase, TAU) / TAU
+		var alpha := (1.0 - rise) * 0.05
+		if alpha <= 0.002:
+			continue
+		var pos := Vector2(base_x + sin(phase) * 16.0, viewport_size.y * (0.92 - 0.55 * rise))
+		draw_circle(pos, 26.0 + rise * 32.0, Color(accent.r, accent.g, accent.b, alpha))
+
+func draw_clear_effect() -> void:
+	if clear_effect_time < 0.0 or clear_effect_rows.is_empty():
+		return
+	var t := clampf(clear_effect_time / CLEAR_EFFECT_DURATION, 0.0, 1.0)
+	var board_origin: Vector2i = get_board_origin()
+	var pal: Dictionary = get_current_palette()
+	var accent: Color = pal.get("accent", Color8(255, 200, 120)) as Color
+	var board_width_px: float = float(BOARD_WIDTH * CELL_SIZE)
+	for visible_row in clear_effect_rows:
+		var y_px: float = float(board_origin.y + visible_row * CELL_SIZE)
+		draw_rect(Rect2(Vector2(float(board_origin.x), y_px), Vector2(board_width_px, float(CELL_SIZE))), Color(accent.r, accent.g, accent.b, (1.0 - t) * 0.45), true)
+		for i in range(6):
+			var cx: float = float(board_origin.x) + (float(i) + 0.5) / 6.0 * board_width_px
+			var puff_y: float = y_px + float(CELL_SIZE) * 0.5 - t * float(CELL_SIZE) * 1.4
+			draw_circle(Vector2(cx, puff_y), float(CELL_SIZE) * 0.32 * (0.6 + t), Color(1.0, 1.0, 1.0, (1.0 - t) * 0.28))
 
 func draw_boss_panel() -> void:
 	var font := ThemeDB.fallback_font
@@ -662,7 +834,10 @@ func draw_boss_panel() -> void:
 			if prog > 0.0:
 				draw_rect(Rect2(bar_rect.position, Vector2(bar_rect.size.x * prog, bar_rect.size.y)), Color8(232, 92, 110), true)
 			draw_rect(bar_rect, Color8(126, 142, 160), false, 2.0)
-			draw_string(font, Vector2(panel.position.x + 22, panel.position.y + 82), "Limpe linhas suficientes para vencer o confronto.", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, accent)
+			var lines_hint := "Limpe linhas suficientes para vencer o confronto."
+			if StageLibrary.get_grease_interval(current_stage) > 0.0:
+				lines_hint = "A gordura sobe! Use o freezer (F) e limpe a brecha."
+			draw_string(font, Vector2(panel.position.x + 22, panel.position.y + 82), lines_hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, accent)
 		elif mode == "orders":
 			var otgt: int = maxi(StageLibrary.get_boss_orders_target(current_stage), 1)
 			var oprog: float = clampf(float(boss_orders_cleared_stage) / float(otgt), 0.0, 1.0)
@@ -672,7 +847,10 @@ func draw_boss_panel() -> void:
 			if oprog > 0.0:
 				draw_rect(Rect2(obar.position, Vector2(obar.size.x * oprog, obar.size.y)), Color8(120, 200, 140), true)
 			draw_rect(obar, Color8(126, 142, 160), false, 2.0)
-			draw_string(font, Vector2(panel.position.x + 22, panel.position.y + 82), "Limpe a fileira DOURADA inteira como parte de uma linha.", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, accent)
+			var orders_hint := "Limpe a fileira DOURADA inteira como parte de uma linha."
+			if StageLibrary.hides_next(current_stage):
+				orders_hint = "Sem previa: a PROXIMA peca fica oculta. Sirva os pedidos!"
+			draw_string(font, Vector2(panel.position.x + 22, panel.position.y + 82), orders_hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, accent)
 		return
 
 	var stage_title := StageLibrary.get_stage_label(current_stage)
@@ -693,7 +871,9 @@ func draw_boss_panel() -> void:
 		draw_rect(Rect2(bar_rect.position, Vector2(bar_rect.size.x * progress, bar_rect.size.y)), Color8(232, 92, 110), true)
 	draw_rect(bar_rect, Color8(126, 142, 160), false, 2.0)
 
-	if StageLibrary.get_mechanic_id(current_stage) == "orders":
+	if StageLibrary.get_grease_interval(current_stage) > 0.0:
+		draw_string(font, Vector2(panel.position.x + 22, panel.position.y + 82), "Gordura sobe pela base — limpe a brecha e use o freezer (F).", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, accent)
+	elif StageLibrary.get_mechanic_id(current_stage) == "orders":
 		draw_string(font, Vector2(panel.position.x + 22, panel.position.y + 82), "Dica: limpe a fileira dourada para bonus de pontos.", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, accent)
 	elif StageLibrary.get_mechanic_id(current_stage) == "pressure":
 		draw_string(font, Vector2(panel.position.x + 22, panel.position.y + 82), "Gravidade aumentada neste ato — pense rapido.", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, accent)
@@ -716,11 +896,86 @@ func draw_locked_cells() -> void:
 	if locked_cells_cache.is_empty():
 		return
 
+	## Agrupa por familia visual para o macarrao se encaixar entre pecas vizinhas.
+	var family_cells: Dictionary = {}
 	for piece_id in locked_cells_cache.keys():
-		var colored_cells: Array[Vector2i] = []
+		var family: String = PASTA_TILES_SCRIPT.visual_family(str(piece_id))
+		if not family_cells.has(family):
+			var empty_bucket: Array[Vector2i] = []
+			family_cells[family] = empty_bucket
+		var bucket: Array[Vector2i] = family_cells[family]
 		for cell in locked_cells_cache[piece_id]:
-			colored_cells.append(cell as Vector2i)
-		draw_soft_piece(colored_cells, PieceLibrary.get_color(piece_id))
+			bucket.append(cell as Vector2i)
+		family_cells[family] = bucket
+
+	var active_family := ""
+	var active_cells: Array[Vector2i] = []
+	if not game_over and not game_won and current_piece_id != "":
+		active_family = PASTA_TILES_SCRIPT.visual_family(current_piece_id)
+		active_cells = get_piece_cells(current_type, current_rotation, current_pivot)
+
+	for family in family_cells.keys():
+		var cells: Array[Vector2i] = family_cells[family]
+		var connect: Dictionary = PASTA_TILES_SCRIPT.build_lookup(cells)
+		if family == active_family:
+			for cell in active_cells:
+				connect[cell] = true
+		draw_pasta_piece(cells, PASTA_TILES_SCRIPT.modulate_for_family(str(family)), 0.0, 0.0, connect)
+
+func draw_current_pasta_piece(pivot: Vector2i, alpha: float, settle: float, squash: float) -> void:
+	var family: String = PASTA_TILES_SCRIPT.visual_family(current_piece_id)
+	var cells: Array[Vector2i] = get_piece_cells(current_type, current_rotation, pivot)
+	var connect: Dictionary = PASTA_TILES_SCRIPT.build_lookup(cells)
+	## Ghost fica sozinho; peca ativa se encaixa com o macarrao ja no tabuleiro.
+	if alpha >= 0.9:
+		for piece_id in locked_cells_cache.keys():
+			if PASTA_TILES_SCRIPT.visual_family(str(piece_id)) != family:
+				continue
+			for cell in locked_cells_cache[piece_id]:
+				connect[cell] = true
+	draw_pasta_piece(cells, PASTA_TILES_SCRIPT.modulate_for_family(family, alpha), settle, squash, connect)
+
+func draw_pasta_piece(
+	cells: Array[Vector2i],
+	modulate: Color = Color.WHITE,
+	settle: float = 0.0,
+	squash: float = 0.0,
+	connect_lookup: Dictionary = {}
+) -> void:
+	var visible_cells: Array[Vector2i] = []
+	for cell in cells:
+		if cell.y < HIDDEN_ROWS or cell.y >= BOARD_HEIGHT:
+			continue
+		visible_cells.append(cell)
+	if visible_cells.is_empty():
+		return
+
+	var lookup: Dictionary = connect_lookup
+	if lookup.is_empty():
+		lookup = PASTA_TILES_SCRIPT.build_lookup(visible_cells)
+
+	var atlas: Texture2D = PASTA_TILES_SCRIPT.get_atlas()
+	if atlas == null:
+		draw_soft_piece(visible_cells, PieceLibrary.PASTA_COLOR, settle, squash)
+		return
+
+	var grow_amount := settle * SETTLE_MAX_GROW
+	var squash_amount := squash * SETTLE_MAX_SQUASH
+	## Overdraw leve evita fissuras entre tiles ao escalar 16 -> CELL_SIZE.
+	var overdraw := 0.75 + grow_amount
+
+	for cell in visible_cells:
+		var mask: int = PASTA_TILES_SCRIPT.neighbor_mask(cell, lookup)
+		var src := PASTA_TILES_SCRIPT.region_for_mask(mask)
+		var base := Rect2(Vector2(board_to_screen(cell)), Vector2(CELL_SIZE, CELL_SIZE))
+		var rect := base.grow(overdraw)
+		if squash_amount > 0.0:
+			var target_h := rect.size.y * (1.0 - squash_amount)
+			var target_w := rect.size.x * (1.0 + squash_amount * 1.15)
+			rect.position.x -= (target_w - rect.size.x) * 0.5
+			rect.position.y += (rect.size.y - target_h) * 0.5
+			rect.size = Vector2(target_w, target_h)
+		draw_texture_rect_region(atlas, rect, src, modulate)
 
 func draw_obstacle_cells() -> void:
 	if obstacle_cells_cache.is_empty():
@@ -926,17 +1181,23 @@ func draw_side_panel() -> void:
 	draw_preview_box(Vector2i(side_panel_x, top_y + 152), hold_piece_id, Vector2i(152, 92))
 
 	draw_string(font, Vector2(side_panel_x, top_y + 280), "PROXIMA", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, title_color)
-	if not next_queue.is_empty():
+	if StageLibrary.hides_next(current_stage):
+		draw_hidden_preview_box(Vector2i(side_panel_x, top_y + 290), Vector2i(152, 92), font)
+	elif not next_queue.is_empty():
 		draw_preview_box(Vector2i(side_panel_x, top_y + 290), next_queue[0], Vector2i(152, 92))
 
-	if _CampaignSaveScript.is_cleaner_unlocked():
-		draw_rect(Rect2(Vector2(side_panel_x, top_y + 392), Vector2(170, 52)), Color8(18, 24, 34), true)
-		draw_rect(Rect2(Vector2(side_panel_x, top_y + 392), Vector2(170, 52)), Color8(88, 106, 126), false, 2.0)
-		draw_string(font, Vector2(side_panel_x + 16, top_y + 412), "LIMPEZA", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, title_color)
+	if CAMPAIGN_SAVE_SCRIPT.is_cleaner_unlocked():
 		var cleaner_status := "PRONTO (L)"
 		if cleaner_cooldown_remaining > 0.0:
-			cleaner_status = "Recarga: %ds" % int(ceil(cleaner_cooldown_remaining))
-		draw_string(font, Vector2(side_panel_x + 16, top_y + 432), cleaner_status, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, value_color)
+			cleaner_status = "%ds (L)" % int(ceil(cleaner_cooldown_remaining))
+		draw_tool_box(Vector2(side_panel_x, top_y + 392), Vector2(82, 52), "LIMPEZA", cleaner_status, font)
+
+		var freezer_status := "PRONTO (F)"
+		if freezer_time_remaining > 0.0:
+			freezer_status = "ATIVO %ds" % int(ceil(freezer_time_remaining))
+		elif freezer_cooldown_remaining > 0.0:
+			freezer_status = "%ds (F)" % int(ceil(freezer_cooldown_remaining))
+		draw_tool_box(Vector2(side_panel_x + 88, top_y + 392), Vector2(82, 52), "FREEZER", freezer_status, font)
 
 	draw_rect(Rect2(Vector2(side_panel_x, top_y + 452), Vector2(170, 110)), Color8(18, 24, 34), true)
 	draw_rect(Rect2(Vector2(side_panel_x, top_y + 452), Vector2(170, 110)), Color8(88, 106, 126), false, 2.0)
@@ -954,13 +1215,32 @@ func draw_preview_box(origin: Vector2i, piece_id: String, size := Vector2i(120, 
 		return
 
 	var piece_type := PieceLibrary.get_base_type(piece_id)
-	var color := PieceLibrary.get_color(piece_id)
+	var family: String = PASTA_TILES_SCRIPT.visual_family(piece_id)
+	var modulate: Color = PASTA_TILES_SCRIPT.modulate_for_family(family)
+	var cells: Array[Vector2i] = PieceLibrary.get_cells(piece_type, 0)
+	var lookup: Dictionary = PASTA_TILES_SCRIPT.build_lookup(cells)
+	var atlas: Texture2D = PASTA_TILES_SCRIPT.get_atlas()
 	var base := Vector2(origin) + Vector2(size.x * 0.34, size.y * 0.42)
-	for cell in PieceLibrary.get_cells(piece_type, 0):
-		var pos := base + Vector2(cell) * 16.0
-		var fill := color if color.a >= 1.0 else Color(color.r, color.g, color.b, 0.58)
-		draw_rect(Rect2(pos, Vector2(14, 14)), fill, true)
-		draw_rect(Rect2(pos, Vector2(14, 14)), color.lightened(0.18), false, 1.0)
+	var preview_cell := 16.0
+	for cell in cells:
+		var pos := base + Vector2(cell) * preview_cell
+		var rect := Rect2(pos, Vector2(preview_cell, preview_cell)).grow(0.5)
+		if atlas != null:
+			var mask: int = PASTA_TILES_SCRIPT.neighbor_mask(cell, lookup)
+			draw_texture_rect_region(atlas, rect, PASTA_TILES_SCRIPT.region_for_mask(mask), modulate)
+		else:
+			draw_rect(rect, PieceLibrary.get_color(piece_id), true)
+
+func draw_hidden_preview_box(origin: Vector2i, size: Vector2i, font: Font) -> void:
+	draw_rect(Rect2(origin, size), Color8(22, 28, 38), true)
+	draw_rect(Rect2(origin, size), Color8(88, 106, 126), false, 1.5)
+	draw_string(font, Vector2(origin) + Vector2(size.x * 0.42, size.y * 0.62), "?", HORIZONTAL_ALIGNMENT_LEFT, -1, 40, Color8(150, 118, 96))
+
+func draw_tool_box(origin: Vector2, box_size: Vector2, label: String, status: String, font: Font) -> void:
+	draw_rect(Rect2(origin, box_size), Color8(35, 27, 20), true)
+	draw_rect(Rect2(origin, box_size), Color8(110, 82, 52), false, 2.0)
+	draw_string(font, origin + Vector2(10, 20), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color8(242, 236, 226))
+	draw_string(font, origin + Vector2(10, 40), status, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color8(200, 214, 224))
 
 func draw_pause_overlay() -> void:
 	var font := ThemeDB.fallback_font
@@ -979,9 +1259,10 @@ func draw_pause_overlay() -> void:
 	draw_string(font, panel.position + Vector2(28, 182), "Z: rotacao anti-horaria", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 	draw_string(font, panel.position + Vector2(28, 210), "Espaco ou Enter: hard drop", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 	draw_string(font, panel.position + Vector2(28, 238), "C: hold", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
-	if _CampaignSaveScript.is_cleaner_unlocked():
+	if CAMPAIGN_SAVE_SCRIPT.is_cleaner_unlocked():
 		draw_string(font, panel.position + Vector2(28, 266), "L: produto de limpeza", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
-		draw_string(font, panel.position + Vector2(28, 294), "Esc: voltar ao jogo", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
+		draw_string(font, panel.position + Vector2(28, 294), "F: freezer (desacelera a gravidade)", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
+		draw_string(font, panel.position + Vector2(28, 322), "Esc: voltar ao jogo", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 	else:
 		draw_string(font, panel.position + Vector2(28, 266), "Esc: voltar ao jogo", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 
@@ -990,7 +1271,7 @@ func draw_pause_overlay() -> void:
 	draw_string(font, panel.position + Vector2(390, 182), "Fase normal: barra de pontos + escudo com obstaculos", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 	draw_string(font, panel.position + Vector2(390, 210), "Pedidos: fileira dourada da bonus (ato 2)", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 	draw_string(font, panel.position + Vector2(390, 238), "Chefao: regra especial no painel superior", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
-	if _CampaignSaveScript.is_cleaner_unlocked():
+	if CAMPAIGN_SAVE_SCRIPT.is_cleaner_unlocked():
 		draw_string(font, panel.position + Vector2(390, 266), "L atinge obstaculo mais resistente", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 		draw_string(font, panel.position + Vector2(390, 294), "Recarga 60s; linhas limpas -5s", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color8(180, 205, 225))
 

@@ -5,10 +5,15 @@ const PASTA_COLOR := Color8(241, 205, 101)
 const BACON_COLOR := Color8(132, 78, 52)
 const BACON_SUFFIX := ":bacon"
 
+## Celula de "gordura" (mecanica de linha-lixo que sobe). Nao e um tetromino.
+const GREASE_ID := ":grease"
+const GREASE_COLOR := Color8(126, 100, 44)
+
 const TYPES: Array[String] = [
 	"I", "O", "T", "S", "Z", "J", "L", 
 	 ]
  
+## Por enquanto todas as pecas usam a textura/cor de macarrao.
 const COLORS := {
 	"I": PASTA_COLOR,
 	"O": PASTA_COLOR,
@@ -86,6 +91,8 @@ static func is_bacon_piece(piece_id: String) -> bool:
 	return piece_id.ends_with(BACON_SUFFIX)
 
 static func get_color(piece_id: String) -> Color:
+	if piece_id == GREASE_ID:
+		return GREASE_COLOR
 	if is_bacon_piece(piece_id):
 		return BACON_COLOR
 

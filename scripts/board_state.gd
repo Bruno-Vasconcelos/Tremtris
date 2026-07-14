@@ -158,5 +158,32 @@ func damage_highest_durability_obstacle() -> bool:
 	return true
 
 
+## Empurra tudo uma linha para cima e insere uma linha de "gordura" na base,
+## com uma unica brecha (gap_x) que permite completar/limpar a linha.
+## Retorna true se algo foi empurrado para fora do topo (risco de topo).
+func rise_grease_row(gap_x: int) -> bool:
+	var pushed_out := false
+	for x in range(width):
+		if locked_cells[0][x] != "" or obstacle_cells[0][x] > 0:
+			pushed_out = true
+			break
+
+	for y in range(height - 1):
+		locked_cells[y] = locked_cells[y + 1]
+		obstacle_cells[y] = obstacle_cells[y + 1]
+
+	var grease_locked: Array[String] = []
+	var grease_obstacle: Array[int] = []
+	for x in range(width):
+		if x == gap_x:
+			grease_locked.append("")
+		else:
+			grease_locked.append(PieceLibrary.GREASE_ID)
+		grease_obstacle.append(0)
+	locked_cells[height - 1] = grease_locked
+	obstacle_cells[height - 1] = grease_obstacle
+	return pushed_out
+
+
 func is_occupied(cell: Vector2i) -> bool:
 	return locked_cells[cell.y][cell.x] != "" or obstacle_cells[cell.y][cell.x] > 0
